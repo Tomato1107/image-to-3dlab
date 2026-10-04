@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reconstruct it; the canonical turntable rig (azimuth 0/90/180/270, FOV 20 deg,
   distance 3.119) is written beside the output as `<output>.views/transforms.json`, so
   Pixel Match can project every photo back onto the model.
+- **Underexposed multiview input is lifted before reconstruction.** Turntable photos and
+  video frames are often exposed for a bright backdrop, leaving a dark subject that the
+  model faithfully rebuilds as a dark asset; `pixal3d_mv_generate.py` now raises each
+  view's subject mean luminance towards 110 (`--brighten LUX`, clamped at 2.5x,
+  alpha untouched; 0 disables).
 
 ### Fixed
 - **Pixel Match reads Pixal3D's WebP textures.** Pixal3D writes its base colour through
