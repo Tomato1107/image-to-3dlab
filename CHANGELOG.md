@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Pixal3D single-view backend in the CLI.** `pipeline.py IMAGE --pixal3d` runs the
+  C++/GGML single-view pipeline (BiRefNet matte, gauge camera, provenance sidecar),
+  honouring `TMAKER_IMAGE_TO_3DLAB_PIXAL3D_MODELS` / `TMAKER_IMAGE_TO_3DLAB_PIXAL3D_CLI`
+  for installs whose runtime lives outside the repo.
+- **`scripts/pixal3d_mv_generate.py`: four views -> one textured GLB.** Feed front,
+  right, back and left photos of one object and the camera-aware `*_mv.gguf` weights
+  reconstruct it; the canonical turntable rig (azimuth 0/90/180/270, FOV 20 deg,
+  distance 3.119) is written beside the output as `<output>.views/transforms.json`, so
+  Pixel Match can project every photo back onto the model.
+
+### Fixed
+- **Pixel Match reads Pixal3D's WebP textures.** Pixal3D writes its base colour through
+  `EXT_texture_webp`, which `photo_paint.py` could not find (KeyError on raw Pixal3D
+  output); it now resolves the extension's source and rewrites the painted texture as a
+  plain PNG reference.
+
 ## [0.3.8] - 2026-10-03
 
 ### Added
