@@ -26,6 +26,8 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
@@ -59,6 +61,30 @@ RIG_MATRICES = (
 # Same default as the single-view wrapper: the CLI's 7.5 can drop thin parts.
 DEFAULT_GSS = 10.0
 
+# Turntable photos and video frames are often exposed for a bright backdrop, leaving
+# a dark subject that conditions the flows badly (2026-10-02: a mecha turnaround at
+# subject mean 49-58/255). stage_views lifts each view to this subject mean by default.
+BRIGHTEN_TARGET = 110.0
+BRIGHTEN_MAX_GAIN = 2.5
+
+
+def brighten_to_target(rgba: np.ndarray, target: float,
+                       max_gain: float = BRIGHTEN_MAX_GAIN) -> tuple[np.ndarray, float]:
+    """Lift an RGBA image's subject mean towards `target`; returns (image, gain).
+
+    Only the opaque subject is measured and scaled; the alpha channel is untouched.
+    Gain never goes below 1 (brightening only) and is clamped at `max_gain`, so an
+    extremely dark frame is improved without being blown out.
+    """
+    mask = rgba[..., 3] > 128
+    if not mask.any():
+        return rgba, 1.0
+    mean = float(rgba[..., :3][mask].mean())
+    gain = float(np.clip(target / max(mean, 1e-6), 1.0, max_gain))
+    out = rgba.copy()
+    out[..., :3] = np.clip(np.rint(rgba[..., :3] * gain), 0, 255).astype(np.uint8)
+    return out, gain
+
 LICENSE_NAME = "MIT (code + flow weights); DINOv3 License (bundled encoder)"
 LICENSE_URL = "https://huggingface.co/raven38/pixal3d-q8_0-v1"
 
@@ -87,12 +113,13 @@ def _default_matte(image: Path):
     return cut
 
 
-def stage_views(images, directory: Path, matte_fn=None) -> Path:
+def stage_views(images, directory: Path, matte_fn=None, brighten: float | None = None) -> Path:
     """Write the four views and their transforms.json into `directory`.
 
     Every frame keeps the framing it arrived with: a pre-matted image goes in untouched,
     anything else is cut out at its own size. `matte_fn(path) -> PIL RGBA image` exists so
-    tests can stand in for rembg.
+    tests can stand in for rembg. `brighten` lifts each view's subject mean luminance
+    towards that target (see brighten_to_target).
     """
     from PIL import Image
 
@@ -104,6 +131,9 @@ def stage_views(images, directory: Path, matte_fn=None) -> Path:
                 cut = opened.convert("RGBA")
             else:
                 cut = matte_fn(image)
+        if brighten:
+            lifted, _gain = brighten_to_target(np.asarray(cut), brighten)
+            cut = Image.fromarray(lifted)
         cut.save(directory / name)
     (directory / "transforms.json").write_text(
         json.dumps(transforms_json(), indent=2) + "\n", encoding="utf-8"
@@ -128,7 +158,7 @@ def build_command(views: Path, output: Path, res: int, seed: int,
 
 
 def manifest(images, output: Path, *, res: int, seed: int, gss: float,
-             seconds: float, remover: str | None) -> dict[str, object]:
+             seconds: float, remover: str | None, brighten: float | None = None) -> dict[str, object]:
     """The run's provenance record, written beside the GLB as `<output>.json`."""
     return {
         "schema_version": 1,
@@ -138,7 +168,7 @@ def manifest(images, output: Path, *, res: int, seed: int, gss: float,
         ],
         "output": {"path": str(output), "sha256": sha256_file(output)},
         "parameters": {
-            "res": res, "seed": seed, "gss": gss,
+            "res": res, "seed": seed, "gss": gss, "brighten": brighten,
             "views": list(VIEW_NAMES), "fov": RIG_FOV, "rig_distance": RIG_DISTANCE,
         },
         "license": {"name": LICENSE_NAME, "url": LICENSE_URL},
@@ -154,12 +184,15 @@ def manifest(images, output: Path, *, res: int, seed: int, gss: float,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("images", nargs=4, type=Path,
-                        metavar=("FRONT", "RIGHT", "BACK", "LEFT"),
+                        metavar="VIEW",
                         help="front, right, back and left views, in this order")
     parser.add_argument("output", type=Path)
     parser.add_argument("--res", type=int, choices=(1024, 1536), default=1024)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gss", type=float, default=DEFAULT_GSS)
+    parser.add_argument("--brighten", type=float, default=BRIGHTEN_TARGET, metavar="LUX",
+                        help=f"lift each view's subject mean luminance to LUX "
+                             f"(default {BRIGHTEN_TARGET}); 0 disables")
     parser.add_argument("--models", type=Path, default=MODELS)
     parser.add_argument("--cli", type=Path, default=CLI)
     args = parser.parse_args(argv)
@@ -197,7 +230,10 @@ def main(argv: list[str] | None = None) -> int:
     remover = matte_model() if needs_matte else None
     if remover:
         print(f"[pixal3d-mv] matting with {remover}", flush=True)
-    stage_views(args.images, views)
+    brighten = args.brighten if args.brighten > 0 else None
+    if brighten:
+        print(f"[pixal3d-mv] brightening views towards subject mean {brighten:.0f}", flush=True)
+    stage_views(args.images, views, brighten=brighten)
     print(f"[pixal3d-mv] staged {views} (canonical rig: 4 views, FOV 20 deg)", flush=True)
 
     command = build_command(views, args.output, args.res, args.seed,
@@ -222,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
 
     seconds = time.time() - started
     record = manifest(args.images, args.output, res=args.res, seed=args.seed,
-                      gss=args.gss, seconds=seconds, remover=remover)
+                      gss=args.gss, seconds=seconds, remover=remover, brighten=brighten)
     record_path = args.output.with_name(f"{args.output.stem}.json")
     record_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     size = args.output.stat().st_size / 1048576
