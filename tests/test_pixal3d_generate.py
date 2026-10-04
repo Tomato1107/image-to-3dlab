@@ -50,6 +50,32 @@ def test_an_unmatted_image_is_handed_to_birefnet():
     assert command[command.index("--bg-removal") + 1] == "birefnet"
 
 
+def test_native_matte_uses_the_selected_external_runtime(tmp_path, monkeypatch):
+    cli = tmp_path / "runtime" / "build" / "trellis-cli.exe"
+    models = tmp_path / "models"
+    cli.parent.mkdir(parents=True)
+    models.mkdir()
+    cli.write_bytes(b"exe")
+    source = tmp_path / "input.jpg"
+    source.write_bytes(b"jpg")
+    output = tmp_path / "asset.glb"
+    cutout = tmp_path / "asset_cutout.png"
+    recorded = {}
+
+    def fake_run(command, **kwargs):
+        recorded["command"] = command
+        recorded["cwd"] = kwargs["cwd"]
+        cutout.write_bytes(b"png")
+
+    monkeypatch.setattr(px.subprocess, "run", fake_run)
+    found, model = px.cli_matte(source, output, cli=cli, models=models)
+
+    assert found == cutout
+    assert model == "birefnet"
+    assert recorded["command"][0] == str(cli.resolve())
+    assert recorded["cwd"] == str(cli.resolve().parent.parent)
+
+
 def test_the_gauge_camera_and_weight_family_are_always_passed():
     command = px.build_command(
         Path("fox.png"), Path("out.glb"), 1024, 42, px.DEFAULT_FOV,

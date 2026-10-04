@@ -168,6 +168,34 @@ def matte(image: Path, destination: Path | None = None) -> tuple[Path, str]:
     return destination, model
 
 
+def cli_matte(image: Path, destination: Path, *, cli: Path, models: Path) -> tuple[Path, str]:
+    """Use Pixal3D's bundled BiRefNet when Python rembg is not installed.
+
+    Windows image-to-3dlab installs the self-contained C++ runtime on the model drive;
+    requiring a second Python segmentation stack would make that real route fail before
+    inference.  The native `--bg-only` path is the same remover the generation run uses.
+    """
+    destination = destination.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            str(cli.resolve()),
+            "--image", str(image.resolve()),
+            "--output", str(destination.with_suffix(".glb")),
+            "--models", str(models.resolve()),
+            "--bg-removal", "birefnet",
+            "--bg-only",
+            "--dump-bg",
+        ],
+        cwd=str(cli.resolve().parent.parent),
+        check=True,
+    )
+    cutout = destination.with_name(f"{destination.stem}_cutout.png")
+    if not cutout.is_file():
+        raise RuntimeError(f"Pixal3D background removal did not write {cutout}")
+    return cutout, "birefnet"
+
+
 def build_command(
     image: Path, output: Path, res: int, seed: int, fov: float,
     models: Path = MODELS, cli: Path = CLI, matted: bool = True,
@@ -358,7 +386,17 @@ def main() -> int:
         print("[pixal3d] --no-matte: using the image exactly as given", flush=True)
     elif args.matte or not matted:
         print(f"[pixal3d] matting with {matte_model()}", flush=True)
-        image, used_matte = matte(image)
+        try:
+            image, used_matte = matte(image)
+        except ModuleNotFoundError as exc:
+            if exc.name != "rembg":
+                raise
+            image, used_matte = cli_matte(
+                image,
+                args.output,
+                cli=args.cli,
+                models=args.models,
+            )
         if fallback_note(used_matte):
             print(f"[pixal3d] note: {fallback_note(used_matte)}", flush=True)
         matted = True
@@ -374,8 +412,12 @@ def main() -> int:
           flush=True)
     print(f"[pixal3d] {steps_note}", flush=True)
 
+    # The CLI may live outside this source checkout (Tmaker keeps large runtimes on a
+    # separate model drive).  Run beside the selected executable so its CUDA DLLs and
+    # relative runtime assets resolve there instead of assuming vendor/ under the repo.
+    runtime_root = args.cli.expanduser().resolve().parent.parent
     process = subprocess.Popen(
-        command, cwd=str(PIXAL3D_ROOT), stdout=subprocess.PIPE,
+        command, cwd=str(runtime_root), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, text=True, bufsize=1, env=run_env(steps),
     )
     assert process.stdout is not None

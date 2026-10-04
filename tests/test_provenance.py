@@ -18,6 +18,12 @@ def test_trellis_inherits_dinov3_conditional_classification():
     assert profile.classification == "commercial-conditional"
 
 
+def test_pixal3d_records_split_encoder_license():
+    profile = validate_run_policy("pixal3d", "game", "worldwide", True)
+    assert profile.classification == "commercial-conditional"
+    assert "DINOv3" in " ".join(profile.conditions)
+
+
 def test_trellis_is_blocked_when_manifest_disallows_conditionals():
     with pytest.raises(ValueError, match="disallows conditional"):
         validate_run_policy("trellis2", "game", "worldwide", False)

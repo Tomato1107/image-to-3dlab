@@ -14,7 +14,7 @@ from .provenance import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Turn one image into a 3D asset with SF3D or ComfyUI/Hunyuan3D."
+        description="Turn one image into a 3D asset with Pixal3D, SF3D, TRELLIS.2 or ComfyUI/Hunyuan3D."
     )
     parser.add_argument("image", nargs="?", type=Path, help="PNG/JPEG/WebP input image")
     parser.add_argument(
@@ -29,6 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     mode.add_argument(
         "--trellis", action="store_true", help="Run TRELLIS.2 through the Mac port"
+    )
+    mode.add_argument(
+        "--pixal3d", action="store_true", help="Run Pixal3D C++/GGML single-view pipeline"
     )
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
     parser.add_argument(
@@ -151,7 +154,8 @@ def main(argv: list[str] | None = None) -> int:
             args.fast = backend == "sf3d"
             args.quality = backend == "hunyuan-comfyui"
             args.trellis = backend == "trellis2"
-            if not (args.fast or args.quality or args.trellis):
+            args.pixal3d = backend == "pixal3d"
+            if not (args.fast or args.quality or args.trellis or args.pixal3d):
                 raise ValueError(f"backend {backend!r} is not implemented yet")
             parameters = model.get("parameters", {})
             args.model = model.get("id", args.model)
@@ -186,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         except (KeyError, TypeError, ValueError) as exc:
             print(f"error: invalid run manifest: {exc}", file=sys.stderr)
             return 2
-    elif args.image is None or sum((args.fast, args.quality, args.trellis)) != 1:
+    elif args.image is None or sum((args.fast, args.quality, args.trellis, args.pixal3d)) != 1:
         print(
             "error: provide --run-manifest, or IMAGE with exactly one mode",
             file=sys.stderr,
@@ -214,7 +218,10 @@ def main(argv: list[str] | None = None) -> int:
         if manifest_data
         else False,
     }
-    backend = "sf3d" if args.fast else "trellis2" if args.trellis else "hunyuan-comfyui"
+    backend = (
+        "sf3d" if args.fast else "trellis2" if args.trellis
+        else "pixal3d" if args.pixal3d else "hunyuan-comfyui"
+    )
     policy = manifest_data.get("license_policy", {}) if manifest_data else {}
     try:
         profile = validate_run_policy(
@@ -243,7 +250,36 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        if args.fast:
+        if args.pixal3d:
+            from pathlib import Path as _Path
+            wrapper = _Path(__file__).resolve().parents[1] / "scripts" / "pixal3d_generate.py"
+            result = _Path(args.output_dir) / ".working" / f"{image.stem}_pixal3d.glb"
+            result.parent.mkdir(parents=True, exist_ok=True)
+            command = [
+                sys.executable,
+                str(wrapper),
+                str(image),
+                str(result),
+                "--models",
+                os.environ.get(
+                    "TMAKER_IMAGE_TO_3DLAB_PIXAL3D_MODELS",
+                    str(_Path(__file__).resolve().parents[1] / "vendor" / "pixal3d-cpp" / "models" / "pixal3d-sv"),
+                ),
+                "--cli",
+                os.environ.get(
+                    "TMAKER_IMAGE_TO_3DLAB_PIXAL3D_CLI",
+                    str(_Path(__file__).resolve().parents[1] / "vendor" / "pixal3d-cpp" / "build" / "trellis-cli"),
+                ),
+                "--seed",
+                str(args.seed),
+            ]
+            if args.steps is not None:
+                command.extend(("--steps", str(args.steps)))
+            import subprocess
+            completed = subprocess.run(command, check=False)
+            if completed.returncode:
+                raise RuntimeError(f"Pixal3D exited with code {completed.returncode}")
+        elif args.fast:
             if args.cpu:
                 os.environ["SF3D_USE_CPU"] = "1"
             from .sf3d_backend import SF3DOptions, generate_sf3d

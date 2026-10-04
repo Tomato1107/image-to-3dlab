@@ -74,6 +74,17 @@ LICENSES = {
             "BRIA RMBG-2.0 is disabled and must not be loaded in commercial runs.",
         ),
     ),
+    "pixal3d": LicenseProfile(
+        classification="commercial-conditional",
+        folder="conditional",
+        license_name="MIT (Pixal3D code + flow weights) + DINOv3 License",
+        license_url="https://huggingface.co/raven38/pixal3d-sv-q8_0-v1",
+        conditions=(
+            "Pixal3D code and flow weights are MIT licensed.",
+            "The bundled DINOv3 image encoder is governed by the separate DINOv3 License.",
+            "Background removal uses the separately licensed BiRefNet model.",
+        ),
+    ),
     "qwen-image-2.1": LicenseProfile(
         classification="research-only",
         folder="research_only",
