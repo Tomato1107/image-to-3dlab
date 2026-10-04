@@ -289,3 +289,33 @@ def test_unseen_paint_takes_on_the_photo_palette():
     # The hidden back quad is untouched without matching, and shifted towards the photo with it.
     assert tuple(plain[32, 80]) == (120, 60, 60)
     assert matched[32, 80, 0] > 120 and matched[32, 80, 1] < 60
+
+
+def _webp_extension_glb() -> bytes:
+    """The same quad GLB, but with its texture carried by EXT_texture_webp, as
+    pixal3d.cpp writes: no top-level `source` on the texture."""
+    doc, binary = pp._split_glb(_textured_glb())
+    texture = doc["textures"][0]
+    texture["extensions"] = {"EXT_texture_webp": {"source": texture.pop("source")}}
+    doc["extensionsUsed"] = ["EXT_texture_webp"]
+    return pp._join_glb(doc, binary)
+
+
+def test_a_webp_extension_texture_is_found(tmp_path):
+    path = tmp_path / "webp.glb"
+    path.write_bytes(_webp_extension_glb())
+    _, _, _, texture = pp.read_glb(path)
+    assert texture.shape[:2] == (8, 8)
+
+
+def test_swapping_a_webp_texture_rewrites_it_as_a_plain_source(tmp_path):
+    swapped = pp.replace_base_colour(
+        _webp_extension_glb(), pp.encode_png(np.zeros((8, 8, 3), dtype=np.uint8)))
+    doc, _ = pp._split_glb(swapped)
+    texture = doc["textures"][0]
+    # The replacement is a PNG, which must not sit behind a WebP extension.
+    assert "source" in texture and "extensions" not in texture
+    path = tmp_path / "out.glb"
+    path.write_bytes(swapped)
+    _, _, _, texture_pixels = pp.read_glb(path)
+    assert texture_pixels.shape[:2] == (8, 8)

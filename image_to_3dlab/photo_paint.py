@@ -406,6 +406,19 @@ def _accessor(doc: dict, binary: bytes, index: int) -> np.ndarray:
                          offset=start).reshape(accessor["count"], width)
 
 
+def _texture_source(texture: dict) -> int:
+    """The image index behind a texture, top-level or via EXT_texture_webp.
+
+    pixal3d.cpp carries every texture through the WebP extension, leaving no top-level
+    `source`; a plain glTF reader's field is still checked first."""
+    if "source" in texture:
+        return texture["source"]
+    webp = texture.get("extensions", {}).get("EXT_texture_webp", {})
+    if "source" in webp:
+        return webp["source"]
+    raise ValueError("texture has no image source")
+
+
 def base_colour_image_index(doc: dict) -> int:
     """The image index the (single) material uses as base colour."""
     materials = doc.get("materials") or []
@@ -414,7 +427,7 @@ def base_colour_image_index(doc: dict) -> int:
     texture = materials[0].get("pbrMetallicRoughness", {}).get("baseColorTexture")
     if texture is None:
         raise ValueError("the material has no base colour texture to paint")
-    return doc["textures"][texture["index"]]["source"]
+    return _texture_source(doc["textures"][texture["index"]])
 
 
 def read_glb(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -461,7 +474,17 @@ def replace_base_colour(data: bytes, png: bytes) -> bytes:
         view["byteLength"] = len(chunk)
         packed += chunk
     doc["buffers"][0]["byteLength"] = len(packed)
-    doc["images"][base_colour_image_index(doc)]["mimeType"] = "image/png"
+    image_index = base_colour_image_index(doc)
+    doc["images"][image_index]["mimeType"] = "image/png"
+    for texture in doc.get("textures", []):
+        # The replacement is a PNG: it must not stay behind EXT_texture_webp, whose
+        # source is defined to be WebP. Promote it to a plain `source` reference.
+        webp = texture.get("extensions", {}).get("EXT_texture_webp")
+        if webp and webp.get("source") == image_index and "source" not in texture:
+            texture["source"] = image_index
+            del texture["extensions"]["EXT_texture_webp"]
+            if not texture["extensions"]:
+                del texture["extensions"]
     return _join_glb(doc, packed)
 
 
